@@ -1,0 +1,7 @@
+[client]
+# Hide deploy button and development tools (viewer mode)
+showErrorDetails = true
+toolbarMode = "viewer"
+
+[browser]
+gatherUsageStats = false
