@@ -187,6 +187,8 @@ Claude Code Usage Analytics Platform/
 │   ├── api_client.py       # Backend API client
 │   └── components/         # UI components
 ├── data/                   # telemetry_logs.jsonl, employees.csv, claude_analytics.db
+|-docs/
+|   |-LLM_USAGE_LOG.md
 ├── scripts/
 │   ├── generate_and_ingest.py
 │   └── ingest_existing.py
