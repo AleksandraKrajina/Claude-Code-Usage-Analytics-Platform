@@ -44,10 +44,9 @@ def setup_page() -> None:
         .main { background-color: #0e1117; }
         .stMetric { background: rgba(30,30,30,0.6); padding: 1rem; border-radius: 8px; }
         div[data-testid="stMetricValue"] { font-size: 1.8rem !important; }
-        /* Remove deploy button, menu, and footer */
+        /* Remove deploy button and footer, keep Stop button and toolbar icons */
         #MainMenu { visibility: hidden; }
         footer { visibility: hidden; }
-        [data-testid="stToolbar"] { visibility: hidden; }
         button[title="Deploy"] { display: none !important; }
         a[href*="streamlit.io"] { display: none !important; }
         </style>
