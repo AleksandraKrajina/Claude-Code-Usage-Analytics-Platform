@@ -106,6 +106,17 @@ def hourly_usage_by_model(
     return analytics.get_hourly_usage_by_model(db, hours=hours)
 
 
+@router.get("/tool-usage-distribution")
+def tool_usage_distribution(
+    hours: Optional[int] = Query(default=24, ge=1, le=720),
+    db: Session = Depends(get_db_session),
+):
+    """
+    Get tool usage distribution for pie/bar chart (tool_decision + tool_result).
+    """
+    return analytics.get_tool_usage_distribution(db, hours=hours)
+
+
 @router.get("/cost-by-model")
 def cost_by_model(
     hours: Optional[int] = Query(default=24, ge=1, le=720),

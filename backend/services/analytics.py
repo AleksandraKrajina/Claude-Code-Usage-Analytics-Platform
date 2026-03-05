@@ -309,6 +309,34 @@ def get_hourly_usage_by_model(db: Session, hours: int = 168) -> List[Dict[str, A
     return [{"hour": r.hour.isoformat() if hasattr(r.hour, "isoformat") else str(r.hour) if r.hour else None, "model": r.model, "total_tokens": r.total or 0} for r in q.all()]
 
 
+def get_tool_usage_distribution(db: Session, hours: Optional[int] = 24) -> List[Dict[str, Any]]:
+    """
+    Tool usage distribution for pie/bar chart (tool_decision + tool_result events).
+    """
+    q = (
+        db.query(TelemetryEvent.tool_name, func.count(TelemetryEvent.id).label("count"))
+        .filter(
+            TelemetryEvent.event_type.in_(["tool_decision", "tool_result"]),
+            TelemetryEvent.tool_name.isnot(None),
+        )
+        .group_by(TelemetryEvent.tool_name)
+        .order_by(func.count(TelemetryEvent.id).desc())
+    )
+    if hours:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+        q = q.filter(TelemetryEvent.timestamp >= cutoff)
+    rows = q.all()
+    total = sum(r.count for r in rows)
+    return [
+        {
+            "tool_name": r.tool_name,
+            "count": r.count,
+            "percentage": round(r.count / total * 100, 2) if total > 0 else 0,
+        }
+        for r in rows
+    ]
+
+
 def get_cost_by_model(db: Session, hours: Optional[int] = 24) -> List[Dict[str, Any]]:
     """
     Cost by model for bar chart.

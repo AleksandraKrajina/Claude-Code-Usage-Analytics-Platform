@@ -64,6 +64,11 @@ def fetch_cost_by_model(hours: int = 24) -> List[Dict[str, Any]]:
     return _get("/analytics/cost-by-model", {"hours": hours})
 
 
+def fetch_tool_usage_distribution(hours: int = 24) -> List[Dict[str, Any]]:
+    """Fetch tool usage distribution."""
+    return _get("/analytics/tool-usage-distribution", {"hours": hours})
+
+
 def fetch_anomalies(hours: int = 168, contamination: float = 0.05) -> Dict[str, Any]:
     """Fetch anomaly detection results."""
     return _get("/analytics/anomalies", {"hours": hours, "contamination": contamination})

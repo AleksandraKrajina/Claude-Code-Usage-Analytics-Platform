@@ -22,12 +22,64 @@ from dashboard.api_client import (
     fetch_tokens_by_type,
     fetch_tokens_by_model,
     fetch_cost_by_model,
+    fetch_tool_usage_distribution,
     fetch_anomalies,
     load_sample_data,
 )
 from dashboard.components.metrics import format_number, gauge_chart, metric_card
 
 logging.basicConfig(level=logging.INFO)
+
+
+# Cached API fetchers to avoid repeated calls and reduce reruns
+@st.cache_data(ttl=60)
+def _cached_overview(hours: int) -> Dict[str, Any]:
+    return fetch_overview(hours)
+
+
+@st.cache_data(ttl=60)
+def _cached_token_by_role(hours: int) -> List[Dict[str, Any]]:
+    return fetch_token_by_role(hours)
+
+
+@st.cache_data(ttl=60)
+def _cached_hourly_usage(hours: int) -> List[Dict[str, Any]]:
+    return fetch_hourly_usage(hours)
+
+
+@st.cache_data(ttl=60)
+def _cached_hourly_usage_by_model(hours: int) -> List[Dict[str, Any]]:
+    return fetch_hourly_usage_by_model(hours)
+
+
+@st.cache_data(ttl=60)
+def _cached_event_type_distribution(hours: int) -> List[Dict[str, Any]]:
+    return fetch_event_type_distribution(hours)
+
+
+@st.cache_data(ttl=60)
+def _cached_tokens_by_type(hours: int) -> List[Dict[str, Any]]:
+    return fetch_tokens_by_type(hours)
+
+
+@st.cache_data(ttl=60)
+def _cached_tokens_by_model(hours: int) -> List[Dict[str, Any]]:
+    return fetch_tokens_by_model(hours)
+
+
+@st.cache_data(ttl=60)
+def _cached_cost_by_model(hours: int) -> List[Dict[str, Any]]:
+    return fetch_cost_by_model(hours)
+
+
+@st.cache_data(ttl=60)
+def _cached_tool_usage_distribution(hours: int) -> List[Dict[str, Any]]:
+    return fetch_tool_usage_distribution(hours)
+
+
+@st.cache_data(ttl=60)
+def _cached_anomalies(hours: int, contamination: float = 0.05) -> Dict[str, Any]:
+    return fetch_anomalies(hours=hours, contamination=contamination)
 
 
 def setup_page() -> None:
@@ -56,7 +108,7 @@ def setup_page() -> None:
 
 
 def render_overview_row(overview: Dict[str, Any], hourly: List[Dict[str, Any]]) -> None:
-    """Render Row 1: Input Tokens, Output Tokens, Cache Read with sparklines."""
+    """Render Row 1: Total Token Consumption (Input, Output, Cache Read) with sparklines."""
     # Build sparkline data from hourly
     totals = [h["total_tokens"] for h in hourly[-24:]] if hourly else []
     inputs = [h["input_tokens"] for h in hourly[-24:]] if hourly else []
@@ -176,7 +228,7 @@ def render_donut_charts(tokens_by_type: List[Dict], tokens_by_model: List[Dict])
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="chart_tokens_by_type")
 
     with cols[1]:
-        st.markdown("**Tokens by Model**")
+        st.markdown("**Token Consumption by Model**")
         if tokens_by_model:
             fig = go.Figure(
                 data=[
@@ -200,8 +252,8 @@ def render_donut_charts(tokens_by_type: List[Dict], tokens_by_model: List[Dict])
 
 
 def render_cost_by_model(cost_by_model: List[Dict]) -> None:
-    """Render horizontal bar chart: Cost by Model."""
-    st.markdown("**Cost by Model**")
+    """Render horizontal bar chart: Cost per Model."""
+    st.markdown("**Cost per Model**")
     if not cost_by_model:
         st.info("No cost data available.")
         return
@@ -255,8 +307,8 @@ def render_hourly_usage(
     hourly: List[Dict],
     anomaly_hours: Optional[List[str]] = None,
 ) -> None:
-    """Render line chart: Token usage over time with anomaly highlighting."""
-    st.markdown("**Token Usage Over Time**")
+    """Render line chart: Hourly AI Usage with anomaly highlighting."""
+    st.markdown("**Hourly AI Usage**")
     if not hourly:
         st.info("No hourly data.")
         return
@@ -429,7 +481,7 @@ def render_peak_usage_hours(hourly: List[Dict]) -> None:
 
 
 def render_event_distribution(events: List[Dict]) -> None:
-    """Render pie chart: Event type distribution."""
+    """Render pie chart: Event Type Distribution."""
     st.markdown("**Event Type Distribution**")
     if not events:
         st.info("No event data.")
@@ -450,6 +502,33 @@ def render_event_distribution(events: List[Dict]) -> None:
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="chart_event_distribution")
 
 
+def render_tool_usage_distribution(tool_usage: List[Dict]) -> None:
+    """Render bar/pie chart: Tool Usage Distribution."""
+    st.markdown("**Tool Usage Distribution**")
+    if not tool_usage:
+        st.info("No tool usage data.")
+        return
+    df = pd.DataFrame(tool_usage)
+    fig = px.bar(
+        df,
+        x="tool_name",
+        y="count",
+        color="count",
+        color_continuous_scale="Teal",
+    )
+    fig.update_layout(
+        height=300,
+        margin=dict(l=10, r=10, t=10, b=60),
+        xaxis_title="Tool",
+        yaxis_title="Usage Count",
+        xaxis_tickangle=-45,
+        showlegend=False,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+    )
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="chart_tool_usage")
+
+
 def main() -> None:
     """Main dashboard entry point."""
     setup_page()
@@ -463,6 +542,7 @@ def main() -> None:
         if st.button("Load Existing", help="Load from data/ or output/"):
             try:
                 result = load_sample_data()
+                st.cache_data.clear()
                 st.success(f"Loaded {result['events_ingested']} events")
                 st.rerun()
             except Exception as e:
@@ -542,6 +622,9 @@ def main() -> None:
         render_token_by_role(token_by_role)
     with col2:
         render_event_distribution(events)
+
+    # Row 5b: Tool Usage Distribution
+    render_tool_usage_distribution(tool_usage)
 
     # Row 6: Peak AI Usage Hours (centered, full width)
     st.markdown("---")
