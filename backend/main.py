@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 
 from backend.config import settings
 from backend.database import init_db
@@ -54,15 +55,16 @@ app.include_router(ingestion.router, prefix=settings.api_prefix)
 
 @app.get("/")
 def root():
+    """Redirect to API docs."""
+    return RedirectResponse(url="/docs", status_code=302)
+
+
+@app.get("/api/v1/health")
+def health():
     """Health check and API info."""
     return {
         "service": "Claude Code Usage Analytics API",
         "version": "1.0.0",
         "docs": "/docs",
-        "endpoints": {
-            "analytics": f"{settings.api_prefix}/analytics/overview",
-            "token_by_role": f"{settings.api_prefix}/analytics/token-by-role",
-            "hourly_usage": f"{settings.api_prefix}/analytics/hourly-usage",
-            "anomalies": f"{settings.api_prefix}/analytics/anomalies",
-        },
+        "dashboard": "Run: python -m streamlit run dashboard/app.py (port 8501)",
     }

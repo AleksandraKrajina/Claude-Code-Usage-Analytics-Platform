@@ -5,3 +5,11 @@ toolbarMode = "viewer"
 
 [browser]
 gatherUsageStats = false
+
+[theme]
+# Dark theme with warm accents
+primaryColor = "#4fc3f7"
+backgroundColor = "#0f1117"
+secondaryBackgroundColor = "#1a1d24"
+textColor = "#f0f2f5"
+font = "sans serif"

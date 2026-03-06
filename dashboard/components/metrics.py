@@ -56,8 +56,11 @@ def metric_card(
         )
         with st.container():
             st.markdown(f"**{title}**")
-            st.markdown(f"<span style='font-size:1.8rem; color:{color};'>{value}</span>", unsafe_allow_html=True)
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key=f"sparkline_{title.replace(' ', '_')}")
+            st.markdown(
+                f"<span style='font-size:1.9rem; font-weight:600; color:{color};'>{value}</span>",
+                unsafe_allow_html=True,
+            )
+            st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key=f"sparkline_{title.replace(' ', '_')}")
     else:
         st.metric(label=title, value=value)
 
@@ -99,4 +102,4 @@ def gauge_chart(value: float, title: str, max_val: float = 100, color: str = "gr
         paper_bgcolor="rgba(0,0,0,0)",
         font=dict(size=12),
     )
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key=f"gauge_{title.replace(' ', '_')}")
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key=f"gauge_{title.replace(' ', '_')}")

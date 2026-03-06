@@ -6,6 +6,8 @@ Layout matches the reference Claude Code Metrics dashboard.
 """
 
 import logging
+import threading
+import time
 from typing import Any, Dict, List, Optional
 
 import streamlit as st
@@ -82,25 +84,106 @@ def _cached_anomalies(hours: int, contamination: float = 0.05) -> Dict[str, Any]
     return fetch_anomalies(hours=hours, contamination=contamination)
 
 
+# Empty placeholder data when backend is unreachable
+_EMPTY_OVERVIEW: Dict[str, Any] = {
+    "total_input_tokens": 0,
+    "total_output_tokens": 0,
+    "total_cache_read": 0,
+    "total_cache_creation": 0,
+    "cache_efficiency_pct": 0,
+    "cost_per_1k_output": 0,
+    "productivity_ratio": 0,
+    "peak_leverage": 0,
+}
+_EMPTY_ANOMALIES: Dict[str, Any] = {"anomaly_hours": []}
+
+
 def setup_page() -> None:
     """Configure Streamlit page layout and styling."""
     st.set_page_config(
         page_title="Claude Code Metrics",
         page_icon="📊",
         layout="wide",
-        initial_sidebar_state="collapsed",
+        initial_sidebar_state="expanded",
     )
     st.markdown(
         """
         <style>
-        .main { background-color: #0e1117; }
-        .stMetric { background: rgba(30,30,30,0.6); padding: 1rem; border-radius: 8px; }
-        div[data-testid="stMetricValue"] { font-size: 1.8rem !important; }
-        /* Remove deploy button and footer, keep Stop button and toolbar icons */
+        /* Base theme - soft dark with warm accents */
+        .main { background: linear-gradient(180deg, #1a1d24 0%, #0f1117 100%); }
+        .stApp { background: #0f1117; }
+        
+        /* Metric cards - elevated, rounded */
+        .stMetric {
+            background: linear-gradient(145deg, #1e2229 0%, #252a33 100%);
+            padding: 1.25rem;
+            border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.06);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }
+        div[data-testid="stMetricValue"] { font-size: 1.9rem !important; font-weight: 600; }
+        div[data-testid="stMetricLabel"] { font-size: 0.85rem !important; opacity: 0.85; }
+        
+        /* Section headers */
+        .section-header {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #e4e6eb;
+            margin-bottom: 0.75rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+        }
+        
+        /* Buttons - more prominent */
+        .stButton > button {
+            border-radius: 8px;
+            font-weight: 500;
+            padding: 0.5rem 1.25rem;
+            transition: all 0.2s ease;
+        }
+        .stButton > button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        
+        /* Sidebar */
+        [data-testid="stSidebar"] {
+            background: linear-gradient(180deg, #161a21 0%, #0f1117 100%);
+            border-right: 1px solid rgba(255,255,255,0.06);
+        }
+        [data-testid="stSidebar"] .stMarkdown { color: #b0b3b8; }
+        
+        /* Alerts - softer */
+        .stAlert { border-radius: 8px; }
+        
+        /* Hide clutter */
         #MainMenu { visibility: hidden; }
         footer { visibility: hidden; }
         button[title="Deploy"] { display: none !important; }
         a[href*="streamlit.io"] { display: none !important; }
+        
+        /* Chart containers */
+        [data-testid="stVerticalBlock"] > div { padding: 0.5rem 0; }
+        
+        /* Header action buttons - mobile-first, touch-friendly, more space */
+        div[data-testid="stVerticalBlock"] > div[data-testid="stHorizontalBlock"]:first-of-type .stButton > button {
+            min-height: 44px;
+            padding: 0.65rem 1.5rem;
+            margin: 0.35rem;
+            font-size: 0.95rem;
+        }
+        /* Spacing around header buttons */
+        div[data-testid="stVerticalBlock"] > div[data-testid="stHorizontalBlock"]:first-of-type > div {
+            padding: 0.25rem;
+        }
+        @media (max-width: 640px) {
+            div[data-testid="stVerticalBlock"] > div[data-testid="stHorizontalBlock"]:first-of-type .stButton {
+                width: 100%;
+            }
+            div[data-testid="stVerticalBlock"] > div[data-testid="stHorizontalBlock"]:first-of-type .stButton > button {
+                width: 100%;
+            }
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -165,8 +248,7 @@ def render_efficiency_row(overview: Dict[str, Any]) -> None:
     with cols[3]:
         st.metric("Peak Leverage", f"{overview.get('peak_leverage', 0):.0f} x")
     with cols[4]:
-        # Simple donut: api_request vs other (simplified Active Time)
-        st.markdown("**Active Time Distribution**")
+        st.caption("Active time")
         total = overview.get("total_input_tokens", 0) + overview.get("total_output_tokens", 0)
         cache = overview.get("total_cache_read", 0) + overview.get("total_cache_creation", 0)
         if total + cache > 0:
@@ -197,7 +279,7 @@ def render_efficiency_row(overview: Dict[str, Any]) -> None:
             paper_bgcolor="rgba(0,0,0,0)",
             legend=dict(orientation="h", yanchor="bottom"),
         )
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="chart_active_time")
+        st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key="chart_active_time")
 
 
 def render_donut_charts(tokens_by_type: List[Dict], tokens_by_model: List[Dict]) -> None:
@@ -205,7 +287,7 @@ def render_donut_charts(tokens_by_type: List[Dict], tokens_by_model: List[Dict])
     cols = st.columns(2)
 
     with cols[0]:
-        st.markdown("**Tokens by Type**")
+        st.caption("By type")
         if tokens_by_type:
             fig = go.Figure(
                 data=[
@@ -225,10 +307,10 @@ def render_donut_charts(tokens_by_type: List[Dict], tokens_by_model: List[Dict])
             showlegend=True,
             paper_bgcolor="rgba(0,0,0,0)",
         )
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="chart_tokens_by_type")
+        st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key="chart_tokens_by_type")
 
     with cols[1]:
-        st.markdown("**Token Consumption by Model**")
+        st.caption("By model")
         if tokens_by_model:
             fig = go.Figure(
                 data=[
@@ -248,14 +330,13 @@ def render_donut_charts(tokens_by_type: List[Dict], tokens_by_model: List[Dict])
             showlegend=True,
             paper_bgcolor="rgba(0,0,0,0)",
         )
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="chart_tokens_by_model")
+        st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key="chart_tokens_by_model")
 
 
 def render_cost_by_model(cost_by_model: List[Dict]) -> None:
     """Render horizontal bar chart: Cost per Model."""
-    st.markdown("**Cost per Model**")
     if not cost_by_model:
-        st.info("No cost data available.")
+        st.caption("No cost data in selected range.")
         return
     df = pd.DataFrame(cost_by_model)
     fig = px.bar(
@@ -275,7 +356,7 @@ def render_cost_by_model(cost_by_model: List[Dict]) -> None:
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
     )
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="chart_cost_by_model")
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key="chart_cost_by_model")
 
 
 def render_token_by_role(token_by_role: List[Dict]) -> None:
@@ -300,7 +381,7 @@ def render_token_by_role(token_by_role: List[Dict]) -> None:
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
     )
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="chart_token_by_role")
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key="chart_token_by_role")
 
 
 def render_hourly_usage(
@@ -308,9 +389,8 @@ def render_hourly_usage(
     anomaly_hours: Optional[List[str]] = None,
 ) -> None:
     """Render line chart: Hourly AI Usage with anomaly highlighting."""
-    st.markdown("**Hourly AI Usage**")
     if not hourly:
-        st.info("No hourly data.")
+        st.caption("No hourly data in selected range.")
         return
     df = pd.DataFrame(hourly)
     df["hour"] = pd.to_datetime(df["hour"])
@@ -359,7 +439,7 @@ def render_hourly_usage(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
     )
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="chart_hourly_usage")
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key="chart_hourly_usage")
 
 
 def render_hourly_by_model(hourly_by_model: List[Dict]) -> None:
@@ -386,7 +466,7 @@ def render_hourly_by_model(hourly_by_model: List[Dict]) -> None:
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
     )
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="chart_hourly_by_model")
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key="chart_hourly_by_model")
 
 
 def render_peak_usage_hours(hourly: List[Dict]) -> None:
@@ -395,7 +475,7 @@ def render_peak_usage_hours(hourly: List[Dict]) -> None:
     Uses existing hourly data, aggregates by hour-of-day.
     """
     if not hourly:
-        st.info("No hourly data for peak usage chart.")
+        st.caption("No hourly data for peak usage chart.")
         return
 
     df = pd.DataFrame(hourly)
@@ -473,7 +553,7 @@ def render_peak_usage_hours(hourly: List[Dict]) -> None:
     # Center chart using columns (narrow side margins, wide center for full width)
     _, chart_col, _ = st.columns([0.5, 4, 0.5])
     with chart_col:
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
 
     st.caption(
         "Shows the hours of the day when AI requests are most frequent."
@@ -499,14 +579,13 @@ def render_event_distribution(events: List[Dict]) -> None:
         showlegend=True,
         paper_bgcolor="rgba(0,0,0,0)",
     )
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="chart_event_distribution")
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key="chart_event_distribution")
 
 
 def render_tool_usage_distribution(tool_usage: List[Dict]) -> None:
     """Render bar/pie chart: Tool Usage Distribution."""
-    st.markdown("**Tool Usage Distribution**")
     if not tool_usage:
-        st.info("No tool usage data.")
+        st.caption("No tool usage data in selected range.")
         return
     df = pd.DataFrame(tool_usage)
     fig = px.bar(
@@ -526,74 +605,148 @@ def render_tool_usage_distribution(tool_usage: List[Dict]) -> None:
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
     )
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="chart_tool_usage")
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key="chart_tool_usage")
+
+
+def _section_header(title: str, icon: str = "") -> None:
+    """Render a consistent section header."""
+    label = f"{icon} {title}" if icon else title
+    st.markdown(f'<p class="section-header">{label}</p>', unsafe_allow_html=True)
 
 
 def main() -> None:
     """Main dashboard entry point."""
     setup_page()
 
-    st.title("📊 Claude Code Metrics")
-    st.caption("Usage analytics from telemetry data")
-
-    # Centered action buttons at top of main page: Load Existing | Local Metrics
-    _, col_btn1, col_btn2, _ = st.columns([1, 1, 1, 1])
-    with col_btn1:
-        if st.button("Load Existing", help="Load from data/ or output/"):
-            try:
-                result = load_sample_data()
-                st.cache_data.clear()
-                st.success(f"Loaded {result['events_ingested']} events")
-                st.rerun()
-            except Exception as e:
-                st.error(str(e))
-    with col_btn2:
-        if st.button("Local Metrics", help="Show local performance metrics"):
-            st.session_state["show_local_metrics"] = True
+    # Handle load completion (don't hide dashboard while loading)
+    if st.session_state.get("loading_data"):
+        load_result = st.session_state.get("load_result")
+        load_error = st.session_state.get("load_error_result")
+        if load_result is not None:
+            st.cache_data.clear()
+            st.session_state["load_success"] = f"✓ Loaded {load_result['events_ingested']} events"
+            st.session_state["loading_data"] = False
+            st.session_state["load_result"] = None
+            st.session_state["load_start_time"] = 0
+            st.rerun()
+        elif load_error is not None:
+            st.session_state["load_error"] = str(load_error)
+            st.session_state["loading_data"] = False
+            st.session_state["load_error_result"] = None
+            st.session_state["load_start_time"] = 0
             st.rerun()
 
-    # Local Performance Metrics section (shown when Local Metrics is clicked)
-    if st.session_state.get("show_local_metrics", False):
-        st.markdown("---")
-        st.markdown("### Local Performance Metrics")
-        lcp_col, cls_col, inp_col = st.columns(3)
-        with lcp_col:
-            st.metric("Largest Contentful Paint (LCP)", "0.33 s")
-        with cls_col:
-            st.metric("Cumulative Layout Shift (CLS)", "0.07")
-        with inp_col:
-            st.metric("Interaction to Next Paint (INP)", "8 ms")
-        st.markdown("---")
+    # Compact loading banner (dashboard stays visible below)
+    is_loading = st.session_state.get("loading_data", False)
+    if is_loading:
+        elapsed = int(time.time() - st.session_state.get("load_start_time", time.time()))
+        st.info(f"⏳ Loading telemetry data… ({elapsed}s) — charts show current data and will update when done.")
 
-    # Sidebar controls
+    # Header - clean hero section, mobile-first, more space for buttons
+    col_logo, col_title, col_actions = st.columns([0.3, 1.2, 2.5])
+    with col_logo:
+        st.markdown('<div style="font-size: 2.5rem; margin-top: 0.5rem;">📊</div>', unsafe_allow_html=True)
+    with col_title:
+        st.markdown(
+            '<h1 style="margin: 0.5rem 0 0.25rem 0; font-size: 1.75rem; font-weight: 600; color: #f0f2f5;">Claude Code Metrics</h1>'
+            '<p style="margin: 0; font-size: 0.95rem; color: #b0b3b8;">Usage analytics from telemetry data</p>',
+            unsafe_allow_html=True,
+        )
+    with col_actions:
+        btn_col1, btn_col2 = st.columns(2)
+        with btn_col1:
+            if st.button("📥 Load Data", key="load_btn", help="Load telemetry from data/"):
+                st.session_state["loading_data"] = True
+                st.session_state["load_result"] = None
+                st.session_state["load_error_result"] = None
+                st.session_state["load_start_time"] = time.time()
+
+                def _load_in_thread():
+                    try:
+                        r = load_sample_data()
+                        st.session_state["load_result"] = r
+                    except Exception as e:
+                        st.session_state["load_error_result"] = e
+
+                threading.Thread(target=_load_in_thread, daemon=True).start()
+                st.rerun()
+        with btn_col2:
+            if st.button("⚡ Local Metrics", key="local_metrics_btn", help="Show performance metrics"):
+                st.session_state["show_local_metrics"] = not st.session_state.get("show_local_metrics", False)
+                st.rerun()
+
+    if st.session_state.get("load_success"):
+        st.success(st.session_state["load_success"])
+        del st.session_state["load_success"]
+    if st.session_state.get("load_error"):
+        st.error(f"**Load failed:** {st.session_state['load_error']}")
+        del st.session_state["load_error"]
+
+    # Local Performance Metrics (collapsible)
+    if st.session_state.get("show_local_metrics", False):
+        with st.expander("⚡ Local Performance Metrics", expanded=True):
+            lcp_col, cls_col, inp_col = st.columns(3)
+            with lcp_col:
+                st.metric("Largest Contentful Paint (LCP)", "0.33 s")
+            with cls_col:
+                st.metric("Cumulative Layout Shift (CLS)", "0.07")
+            with inp_col:
+                st.metric("Interaction to Next Paint (INP)", "8 ms")
+
+    # Sidebar - filters and controls
     with st.sidebar:
-        hours = st.slider("Time range (hours)", 1, 720, 168)
-        hourly_hours = st.slider("Hourly chart range", 24, 720, 168)
+        st.markdown("### ⚙️ Filters")
+        st.markdown("Adjust time range for analytics")
+        st.markdown("")
+
+        hours = st.slider("Time range (hours)", 1, 8760, 720, help="Last N hours of data")
+        st.caption("720h = 30 days")
+
+        hourly_hours = st.slider("Chart range (hours)", 24, 8760, 720, help="Range for hourly charts")
+        st.markdown("")
+
         st.divider()
         st.markdown("**Data source**")
-        st.markdown("FastAPI backend")
-        if st.button("Refresh"):
+        st.caption("FastAPI backend (localhost:8000)")
+        if st.button("🔄 Refresh data"):
+            st.cache_data.clear()
             st.rerun()
 
+    backend_error: Optional[str] = None
     try:
-        overview = fetch_overview(hours)
-        token_by_role = fetch_token_by_role(hours)
-        hourly = fetch_hourly_usage(hourly_hours)
-        events = fetch_event_type_distribution(hours)
-        tokens_by_type = fetch_tokens_by_type(hours)
-        tokens_by_model = fetch_tokens_by_model(hours)
-        cost_by_model = fetch_cost_by_model(hours)
-        hourly_by_model = fetch_hourly_usage_by_model(hourly_hours)
-        anomalies_data = fetch_anomalies(hours=hourly_hours)
+        overview = _cached_overview(hours)
+        token_by_role = _cached_token_by_role(hours)
+        hourly = _cached_hourly_usage(hourly_hours)
+        events = _cached_event_type_distribution(hours)
+        tokens_by_type = _cached_tokens_by_type(hours)
+        tokens_by_model = _cached_tokens_by_model(hours)
+        cost_by_model = _cached_cost_by_model(hours)
+        tool_usage = _cached_tool_usage_distribution(hours)
+        hourly_by_model = _cached_hourly_usage_by_model(hourly_hours)
+        anomalies_data = _cached_anomalies(hourly_hours)
         anomaly_hours = anomalies_data.get("anomaly_hours", [])
     except Exception as e:
-        st.error(f"Failed to fetch data. Ensure the backend is running.\n\nError: {e}")
-        st.info("1. Start backend: `python -m uvicorn backend.main:app --reload --port 8000`")
-        st.info("2. Start PostgreSQL: `docker-compose up -d postgres`")
-        st.info("3. Click **Load Existing** above to load data from data/")
-        return
+        backend_error = str(e)
+        overview = _EMPTY_OVERVIEW.copy()
+        token_by_role = []
+        hourly = []
+        events = []
+        tokens_by_type = []
+        tokens_by_model = []
+        cost_by_model = []
+        tool_usage = []
+        hourly_by_model = []
+        anomaly_hours = []
 
-    # Show banner when no data
+    # Banner when backend unreachable (charts still render with empty data)
+    if backend_error:
+        st.error("**Cannot connect to backend** — charts show empty data. Start the backend:")
+        st.code("python -m uvicorn backend.main:app --reload --port 8000", language="bash")
+        with st.expander("Error details"):
+            st.code(backend_error, language=None)
+        st.markdown("")
+
+    # Banner when no data (backend OK but DB empty)
     has_data = (
         overview.get("total_input_tokens", 0) > 0
         or overview.get("total_output_tokens", 0) > 0
@@ -601,22 +754,48 @@ def main() -> None:
         or token_by_role
         or events
     )
-    if not has_data:
-        st.warning("No data in database. Click **Load Existing** above to load from data/telemetry_logs.jsonl (or **Local Metrics** for performance metrics).")
+    if not has_data and not backend_error:
+        st.info(
+            "**No data yet.** Load telemetry from `data/telemetry_logs.jsonl` — click **Load Data** above."
+        )
+        if st.button("📥 Load data now", key="load_data_now_btn", type="primary"):
+            st.session_state["loading_data"] = True
+            st.session_state["load_result"] = None
+            st.session_state["load_error_result"] = None
+            st.session_state["load_start_time"] = time.time()
 
-    # Row 1: KPIs
+            def _load():
+                try:
+                    st.session_state["load_result"] = load_sample_data()
+                except Exception as ex:
+                    st.session_state["load_error_result"] = ex
+
+            threading.Thread(target=_load, daemon=True).start()
+            st.rerun()
+        st.markdown("")
+
+    # Row 1: Key metrics (always shown)
+    _section_header("Key metrics", "📈")
     render_overview_row(overview, hourly)
+    st.markdown("")
 
     # Row 2: Efficiency metrics
+    _section_header("Efficiency & cost", "⚡")
     render_efficiency_row(overview)
+    st.markdown("")
 
     # Row 3: Donuts
+    _section_header("Token breakdown", "🥧")
     render_donut_charts(tokens_by_type, tokens_by_model)
+    st.markdown("")
 
     # Row 4: Cost by model
+    _section_header("Cost per model", "💰")
     render_cost_by_model(cost_by_model)
+    st.markdown("")
 
     # Row 5: Token by role + Event distribution
+    _section_header("Usage by role & event type", "👥")
     col1, col2 = st.columns(2)
     with col1:
         render_token_by_role(token_by_role)
@@ -624,19 +803,27 @@ def main() -> None:
         render_event_distribution(events)
 
     # Row 5b: Tool Usage Distribution
+    _section_header("Tool usage", "🔧")
     render_tool_usage_distribution(tool_usage)
+    st.markdown("")
 
-    # Row 6: Peak AI Usage Hours (centered, full width)
-    st.markdown("---")
+    # Row 6: Peak AI Usage Hours
+    _section_header("Peak usage hours", "🕐")
     render_peak_usage_hours(hourly)
-    st.markdown("---")
+    st.markdown("")
 
-    # Row 7: Hourly usage with anomalies + hourly by model
+    # Row 7: Hourly charts
+    _section_header("Usage over time", "📉")
     col_h1, col_h2 = st.columns(2)
     with col_h1:
         render_hourly_usage(hourly, anomaly_hours)
     with col_h2:
         render_hourly_by_model(hourly_by_model)
+
+    # Poll for load completion so charts update when data is ready
+    if is_loading:
+        time.sleep(1)
+        st.rerun()
 
 
 if __name__ == "__main__":

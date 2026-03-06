@@ -44,6 +44,32 @@ def _find_telemetry_files(project_root: Path) -> tuple[Optional[str], Optional[s
     return None, None
 
 
+def _get_project_root() -> Path:
+    """Resolve project root from this file's location (backend/routers/ingestion.py -> project root)."""
+    root = Path(__file__).resolve().parents[2]
+    # Fallback: if data/ not found, try cwd (e.g. when run from project root)
+    if not (root / "data" / "telemetry_logs.jsonl").exists() and not (root / "output" / "telemetry_logs.jsonl").exists():
+        cwd = Path.cwd()
+        if (cwd / "data" / "telemetry_logs.jsonl").exists() or (cwd / "output" / "telemetry_logs.jsonl").exists():
+            return cwd
+    return root
+
+
+@router.get("/load/status")
+def load_status():
+    """Return paths and existence for debugging. Helps verify data file is found."""
+    root = _get_project_root()
+    jpath, epath = _find_telemetry_files(root)
+    jpath = jpath or str(root / "data" / "telemetry_logs.jsonl")
+    return {
+        "project_root": str(root),
+        "telemetry_path": jpath,
+        "telemetry_exists": Path(jpath).exists(),
+        "employees_path": epath,
+        "employees_exists": Path(epath).exists() if epath else False,
+    }
+
+
 @router.post("/load", response_model=IngestResponse)
 def load_data(
     jsonl_path: Optional[str] = Query(default=None),
@@ -55,7 +81,7 @@ def load_data(
     
     If paths not provided, auto-detects in data/ or output/ (from generate_fake_data.py).
     """
-    project_root = Path(__file__).resolve().parents[2]
+    project_root = _get_project_root()
     
     if jsonl_path:
         jpath = jsonl_path

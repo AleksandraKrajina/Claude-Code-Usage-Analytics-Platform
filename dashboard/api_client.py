@@ -11,12 +11,17 @@ from dashboard.config import API_BASE_URL
 
 logger = logging.getLogger(__name__)
 
+# Timeouts: ingestion is slow for large files; analytics can be slow for big ranges
+ANALYTICS_TIMEOUT = 180  # 3 min for analytics (large datasets)
+INGEST_TIMEOUT = 300  # 5 min for loading large JSONL
+GENERATE_AND_LOAD_TIMEOUT = 600  # 10 min for generate + ingest
 
-def _get(path: str, params: Optional[Dict[str, Any]] = None) -> Any:
+
+def _get(path: str, params: Optional[Dict[str, Any]] = None, timeout: int = ANALYTICS_TIMEOUT) -> Any:
     """GET request to analytics API."""
     url = f"{API_BASE_URL}{path}"
     try:
-        resp = requests.get(url, params=params or {}, timeout=30)
+        resp = requests.get(url, params=params or {}, timeout=timeout)
         resp.raise_for_status()
         return resp.json()
     except requests.RequestException as e:
@@ -70,14 +75,22 @@ def fetch_tool_usage_distribution(hours: int = 24) -> List[Dict[str, Any]]:
 
 
 def fetch_anomalies(hours: int = 168, contamination: float = 0.05) -> Dict[str, Any]:
-    """Fetch anomaly detection results."""
-    return _get("/analytics/anomalies", {"hours": hours, "contamination": contamination})
+    """Fetch anomaly detection results (ML runs on backend - longer timeout)."""
+    return _get("/analytics/anomalies", {"hours": hours, "contamination": contamination}, timeout=180)
+
+
+def load_status() -> Dict[str, Any]:
+    """Check if backend can find telemetry file."""
+    url = f"{API_BASE_URL}/ingest/load/status"
+    resp = requests.get(url, timeout=10)
+    resp.raise_for_status()
+    return resp.json()
 
 
 def load_sample_data() -> Dict[str, Any]:
     """Load existing telemetry from data/ or output/ into database."""
     url = f"{API_BASE_URL}/ingest/load"
-    resp = requests.post(url, params={"clear_existing": True}, timeout=120)
+    resp = requests.post(url, params={"clear_existing": True}, timeout=INGEST_TIMEOUT)
     resp.raise_for_status()
     return resp.json()
 
@@ -90,7 +103,7 @@ def generate_and_load_sample_data(
     resp = requests.post(
         url,
         params={"num_users": num_users, "num_sessions": num_sessions, "days": days},
-        timeout=300,
+        timeout=GENERATE_AND_LOAD_TIMEOUT,
     )
     resp.raise_for_status()
     return resp.json()

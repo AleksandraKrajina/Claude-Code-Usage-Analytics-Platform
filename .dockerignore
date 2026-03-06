@@ -1,0 +1,23 @@
+# Git and IDE
+.git
+.gitignore
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+
+# Data (mounted at runtime)
+data/
+output/
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Docs and misc
+*.md
+.env
+.env.*

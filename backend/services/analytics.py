@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
-from sqlalchemy import func, and_
+from sqlalchemy import Float, func, and_
 from sqlalchemy.orm import Session
 from sklearn.ensemble import IsolationForest
 
@@ -30,56 +30,63 @@ def _hour_trunc(column):
 def get_overview(db: Session, hours: Optional[int] = 24) -> Dict[str, Any]:
     """
     Compute overview metrics for the dashboard.
-    
-    Args:
-        db: Database session.
-        hours: Optional time window in hours (default 24). None = all time.
-        
-    Returns:
-        Dict with total_input_tokens, total_output_tokens, total_cache_read,
-        cache_efficiency, cost_per_1k_output, productivity_ratio, peak_leverage,
-        avg_tokens_per_session, most_common_event_type.
+    Uses SQL aggregation (no full table load) for speed.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours) if hours else None
-    q = db.query(TelemetryEvent).filter(TelemetryEvent.event_type == "api_request")
+    base = db.query(TelemetryEvent).filter(TelemetryEvent.event_type == "api_request")
     if cutoff:
-        q = q.filter(TelemetryEvent.timestamp >= cutoff)
-    
-    events = q.all()
-    
-    total_input = sum(e.input_tokens for e in events)
-    total_output = sum(e.output_tokens for e in events)
-    total_cache_read = sum(e.cache_read_tokens for e in events)
-    total_cache_create = sum(e.cache_creation_tokens for e in events)
-    total_cost = sum(e.cost_usd for e in events)
-    
-    # Cache efficiency: cache_read / (cache_read + input) when denominator > 0
-    total_without_cache = total_input + total_output
+        base = base.filter(TelemetryEvent.timestamp >= cutoff)
+
+    # Aggregate in SQL - much faster than loading all rows
+    agg = (
+        db.query(
+            func.sum(TelemetryEvent.input_tokens).label("input"),
+            func.sum(TelemetryEvent.output_tokens).label("output"),
+            func.sum(TelemetryEvent.cache_read_tokens).label("cache_read"),
+            func.sum(TelemetryEvent.cache_creation_tokens).label("cache_create"),
+            func.sum(TelemetryEvent.cost_usd).label("cost"),
+        )
+        .filter(TelemetryEvent.event_type == "api_request")
+    )
+    if cutoff:
+        agg = agg.filter(TelemetryEvent.timestamp >= cutoff)
+    row = agg.first()
+
+    total_input = row.input or 0
+    total_output = row.output or 0
+    total_cache_read = row.cache_read or 0
+    total_cache_create = row.cache_create or 0
+    total_cost = row.cost or 0.0
+
     cache_denom = total_cache_read + total_input
     cache_efficiency = (total_cache_read / cache_denom * 100) if cache_denom > 0 else 0.0
-    
-    # Cost per 1K output tokens
     cost_per_1k = (total_cost / (total_output / 1000)) if total_output > 0 else 0.0
-    
-    # Productivity ratio: output / input (how much output per input)
     productivity_ratio = (total_output / total_input) if total_input > 0 else 0.0
-    
-    # Peak leverage: max single-event output/input ratio
-    peak_leverage = 0.0
-    for e in events:
-        if e.input_tokens > 0 and (e.output_tokens / e.input_tokens) > peak_leverage:
-            peak_leverage = e.output_tokens / e.input_tokens
-    
-    # Sessions
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours) if hours else None
+
+    # Peak leverage (single query, max of output/input)
+    peak_q = (
+        db.query(
+            func.max(
+                func.cast(TelemetryEvent.output_tokens, Float) / func.nullif(TelemetryEvent.input_tokens, 0)
+            ).label("peak")
+        )
+        .filter(TelemetryEvent.event_type == "api_request", TelemetryEvent.input_tokens > 0)
+    )
+    if cutoff:
+        peak_q = peak_q.filter(TelemetryEvent.timestamp >= cutoff)
+    peak_leverage = peak_q.scalar() or 0.0
+
     q_sessions = db.query(TelemetryEvent.session_id).distinct()
     if cutoff:
         q_sessions = q_sessions.filter(TelemetryEvent.timestamp >= cutoff)
     session_count = q_sessions.count()
+
     total_tokens_all = (
         db.query(
-            func.sum(TelemetryEvent.input_tokens + TelemetryEvent.output_tokens +
-                     TelemetryEvent.cache_read_tokens + TelemetryEvent.cache_creation_tokens)
+            func.sum(
+                TelemetryEvent.input_tokens + TelemetryEvent.output_tokens
+                + TelemetryEvent.cache_read_tokens + TelemetryEvent.cache_creation_tokens
+            )
         )
         .filter(TelemetryEvent.event_type == "api_request")
     )
@@ -87,8 +94,7 @@ def get_overview(db: Session, hours: Optional[int] = 24) -> Dict[str, Any]:
         total_tokens_all = total_tokens_all.filter(TelemetryEvent.timestamp >= cutoff)
     total_tokens_val = total_tokens_all.scalar() or 0
     avg_tokens_per_session = (total_tokens_val / session_count) if session_count > 0 else 0
-    
-    # Most common event type (all events, not just api_request)
+
     q_ev = db.query(TelemetryEvent.event_type, func.count(TelemetryEvent.id)).group_by(
         TelemetryEvent.event_type
     )
@@ -96,7 +102,7 @@ def get_overview(db: Session, hours: Optional[int] = 24) -> Dict[str, Any]:
         q_ev = q_ev.filter(TelemetryEvent.timestamp >= cutoff)
     ev_counts = q_ev.all()
     most_common = max(ev_counts, key=lambda x: x[1])[0] if ev_counts else "api_request"
-    
+
     return {
         "total_input_tokens": total_input,
         "total_output_tokens": total_output,

@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Generator
 
-from sqlalchemy import delete
+from sqlalchemy import delete, insert
 from sqlalchemy.orm import Session
 
 # Add project root for imports
@@ -207,62 +207,73 @@ def load_employees_csv(filepath: str) -> List[Dict[str, Any]]:
     return rows
 
 
+def _event_to_row(event: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert parsed event dict to DB row (exclude id, created_at)."""
+    return {
+        "user_id": event["user_id"],
+        "session_id": event["session_id"],
+        "role": event.get("role"),
+        "project_type": event.get("project_type"),
+        "event_type": event["event_type"],
+        "timestamp": event["timestamp"],
+        "model": event.get("model"),
+        "input_tokens": event.get("input_tokens", 0),
+        "output_tokens": event.get("output_tokens", 0),
+        "cache_read_tokens": event.get("cache_read_tokens", 0),
+        "cache_creation_tokens": event.get("cache_creation_tokens", 0),
+        "cost_usd": event.get("cost_usd", 0.0),
+        "duration_ms": event.get("duration_ms"),
+        "tool_name": event.get("tool_name"),
+    }
+
+
 def ingest_telemetry(
     jsonl_path: str,
     employees_path: Optional[str] = None,
-    batch_size: int = 1000,
+    batch_size: int = 5000,
     clear_existing: bool = False,
 ) -> Dict[str, int]:
     """
     Ingest telemetry data from JSONL and optionally employees CSV into the database.
-    
-    Args:
-        jsonl_path: Path to telemetry_logs.jsonl.
-        employees_path: Path to employees.csv (optional).
-        batch_size: Number of events to insert per batch.
-        clear_existing: If True, truncate tables before ingesting.
-        
-    Returns:
-        Dict with counts: events_ingested, employees_ingested, batches_processed.
+    Uses bulk_insert_mappings for faster inserts.
     """
     stats = {"events_ingested": 0, "employees_ingested": 0, "batches_processed": 0}
-    
+
     with get_db() as db:
         if clear_existing:
             db.execute(delete(TelemetryEvent))
             db.execute(delete(Employee))
             db.commit()
             logger.info("Cleared existing data.")
-        
-        # Ingest events
+
+        # Ingest events - bulk_insert_mappings is faster than bulk_save_objects
         batch: List[Dict[str, Any]] = []
         for event in iter_events_from_jsonl(jsonl_path):
-            batch.append(TelemetryEvent(**event))
+            batch.append(_event_to_row(event))
             if len(batch) >= batch_size:
-                db.bulk_save_objects(batch)
+                db.execute(TelemetryEvent.__table__.insert(), batch)
                 db.commit()
                 stats["events_ingested"] += len(batch)
                 stats["batches_processed"] += 1
                 batch = []
-                
+
         if batch:
-            db.bulk_save_objects(batch)
+            db.execute(insert(TelemetryEvent.__table__), batch)
             db.commit()
             stats["events_ingested"] += len(batch)
             stats["batches_processed"] += 1
-            
-        # Ingest employees
+
+        # Ingest employees (typically small set)
         if employees_path:
-            employees = load_employees_csv(employees_path)
+            employees = [e for e in load_employees_csv(employees_path) if e.get("email")]
             for emp in employees:
-                if not emp["email"]:
-                    continue
                 existing = db.query(Employee).filter(Employee.email == emp["email"]).first()
                 if not existing:
                     db.add(Employee(**emp))
-            db.commit()
-            stats["employees_ingested"] = len(employees)
-    
+            if employees:
+                db.commit()
+                stats["employees_ingested"] = len(employees)
+
     logger.info(
         "Ingestion complete: %d events, %d employees",
         stats["events_ingested"],
